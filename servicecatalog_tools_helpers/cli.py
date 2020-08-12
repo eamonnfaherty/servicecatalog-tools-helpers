@@ -31,17 +31,17 @@ def cli():
 @click.argument("deploy_to_regions")
 @click.argument("deploy_to_tags")
 def make_product_set(
-    p,
-    owner,
-    description,
-    distributor,
-    support_description,
-    support_email,
-    support_url,
-    tags,
-    portfolio,
-    deploy_to_regions,
-    deploy_to_tags,
+        p,
+        owner,
+        description,
+        distributor,
+        support_description,
+        support_email,
+        support_url,
+        tags,
+        portfolio,
+        deploy_to_regions,
+        deploy_to_tags,
 ):
     products = list()
     launches = dict()
@@ -94,7 +94,7 @@ def make_product_set(
                             dict(
                                 Name=version_name,
                                 Description=d,
-                                Source=dict(Configuration=dict(branch=version_name),),
+                                Source=dict(Configuration=dict(branch=version_name), ),
                             )
                         )
 
@@ -107,8 +107,10 @@ def make_product_set(
 
                         outputs = []
                         for output_name, output_details in y.get('Outputs', {}).items():
-                            outputs.append(dict(param_name=f"/{product_set}/{product_name}/{output_name}", stack_output=output_name))
-                            lookups[output_name] = f"/{product_set}/{product_name}/{output_name}"
+                            outputs.append(dict(param_name=f"/{product_set}/{product_name}/{output_name}",
+                                                stack_output=output_name))
+                            lookups[output_name] = {"param_name": f"/{product_set}/{product_name}/{output_name}",
+                                                    "product_name": product_name}
                         if len(outputs) > 0:
                             launches[product_name]['outputs'] = dict(ssm=outputs)
 
@@ -123,7 +125,7 @@ def make_product_set(
                         )
 
                         new_description = d.replace("\n", "").replace("\r", "") + "\n" + meta
-                        new_description = ''.join('    '+line for line in new_description.splitlines(True))
+                        new_description = ''.join('    ' + line for line in new_description.splitlines(True))
 
                         new_doc = re.sub(
                             r"^Description:((.|\s)*?)^$",
@@ -147,7 +149,7 @@ def make_product_set(
                             dict(
                                 Name=version_name,
                                 Description=d,
-                                Source=dict(Configuration=dict(branch=version_name),),
+                                Source=dict(Configuration=dict(branch=version_name), ),
                             )
                         )
                     else:
@@ -172,15 +174,18 @@ def make_product_set(
                             click.echo(f"looking at {parameter_name}")
                             if lookups.get(parameter_name) is not None:
                                 parameters[parameter_name] = {
-                                    "ssm": dict(name=lookups.get(parameter_name))
+                                    "ssm": dict(name=lookups.get(parameter_name).get('param_name'))
                                 }
+                                if launches[product_name].get('depends_on') is None:
+                                    launches[product_name]['depends_on'] = list()
+                                launches[product_name]['depends_on'].append(lookups.get(parameter_name).get('product_name'))
+
                             else:
                                 parameters[parameter_name] = {
                                     "default": parameter_details.get('Default', "SET_ME")
                                 }
                         if len(parameters.keys()) > 0:
                             launches[product_name]['parameters'] = parameters
-
 
     portfolios_yaml = Path(p) / "portfolio.yaml"
     portfolios_yaml.open("w").write(
