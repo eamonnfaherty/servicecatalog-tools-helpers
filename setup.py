@@ -8,7 +8,7 @@ with open("servicecatalog_tools_helpers/requirements.txt", "r") as fh:
 
 setuptools.setup(
     name="servicecatalog-tools-helpers",
-    version="0.5.0",
+    version="0.6.0",
     author="Eamonn Faherty",
     author_email="packages@designandsolve.co.uk",
     description="helpers for SCT",

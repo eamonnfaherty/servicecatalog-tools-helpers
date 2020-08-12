@@ -9,8 +9,25 @@ from cfn_tools import load_yaml, dump_yaml
 import json
 import yaml
 import re
+
+import collections
 from copy import deepcopy
-from textwrap import indent
+
+
+
+HOME_REGION = os.environ.get(
+    "AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "eu-west-1")
+)
+
+
+def merge(dict1, dict2):
+    result = deepcopy(dict1)
+    for key, value in dict2.items():
+        if isinstance(value, collections.Mapping):
+            result[key] = merge(result.get(key, {}), value)
+        else:
+            result[key] = deepcopy(dict2[key])
+    return result
 
 
 @click.group()
@@ -21,7 +38,6 @@ def cli():
 @cli.command()
 @click.argument("p", type=click.Path(exists=True))
 @click.argument("owner")
-@click.argument("description")
 @click.argument("distributor")
 @click.argument("support_description")
 @click.argument("support_email")
@@ -33,7 +49,6 @@ def cli():
 def make_product_set(
         p,
         owner,
-        description,
         distributor,
         support_description,
         support_email,
@@ -57,7 +72,7 @@ def make_product_set(
             product_details = dict(
                 Name=product_name,
                 Owner=owner,
-                Description=description,
+                Description=product_name,
                 Distributor=distributor,
                 SupportDescription=support_description,
                 SupportEmail=support_email,
@@ -67,7 +82,7 @@ def make_product_set(
                     Configuration=dict(RepositoryName=product_name),
                 ),
                 Versions=versions,
-                # Tags=[],
+                Tags=json.loads(tags),
             )
             products.append(product_details)
             for version in product.iterdir():
@@ -94,7 +109,7 @@ def make_product_set(
                             dict(
                                 Name=version_name,
                                 Description=d,
-                                Source=dict(Configuration=dict(branch=version_name), ),
+                                Source=dict(Configuration=dict(BranchName=version_name), ),
                             )
                         )
 
@@ -149,7 +164,7 @@ def make_product_set(
                             dict(
                                 Name=version_name,
                                 Description=d,
-                                Source=dict(Configuration=dict(branch=version_name), ),
+                                Source=dict(Configuration=dict(BranchName=version_name), ),
                             )
                         )
                     else:
@@ -171,7 +186,6 @@ def make_product_set(
 
                         parameters = {}
                         for parameter_name, parameter_details in y.get('Parameters', {}).items():
-                            click.echo(f"looking at {parameter_name}")
                             if lookups.get(parameter_name) is not None:
                                 parameters[parameter_name] = {
                                     "ssm": dict(name=lookups.get(parameter_name).get('param_name'))
@@ -199,6 +213,83 @@ def make_product_set(
             {"schema": "puppet-2019-04-01", "launches": launches}
         )
     )
+
+
+@cli.command()
+@click.argument("target_portfolio_yaml", type=click.File())
+@click.argument("portfolio_name", default=None)
+@click.argument("source_product_set", type=click.Path())
+def import_product_set(target_portfolio_yaml, portfolio_name, source_product_set):
+    source_portfolio = yaml.safe_load(target_portfolio_yaml.read())
+    target = None
+    if portfolio_name is None:
+        if source_portfolio.get("Products") is None:
+            source_portfolio.get["Products"] = {}
+        target = source_portfolio.get["Products"]
+    else:
+        if source_portfolio.get("Portfolios") is None:
+            source_portfolio["Portfolios"] = []
+        for p in source_portfolio.get("Portfolios"):
+            if p.get("DisplayName") == portfolio_name:
+                if p.get("Products"):
+                    target = p.get("Products")
+                elif p.get("Components"):
+                    target = p.get("Components")
+                else:
+                    target = p["Products"] = []
+        if target is None:
+            p = {
+                "DisplayName": portfolio_name,
+                "Products": [],
+            }
+            target = p.get("Products")
+            source_portfolio["Portfolios"].append(p)
+
+    portfolio_segment = yaml.safe_load(open(Path(source_product_set) / 'portfolio.yaml').read())
+    products = portfolio_segment.get("Portfolios").get(
+        "Components", []
+    ) + portfolio_segment.get("Portfolios").get("Products", [])
+    for product in products:
+        target.append(product)
+        for version in product.get("Versions"):
+
+            source = merge(product.get("Source"), version.get("Source"))
+
+            if source.get("Provider") == "CodeCommit":
+
+                configuration = source.get("Configuration")
+                branch_name = configuration.get("BranchName")
+                repository_name = configuration.get("RepositoryName")
+
+                os.system(
+                    f"aws codecommit create-repository --repository-name {repository_name}"
+                )
+                command = (
+                    "git clone "
+                    "--config 'credential.helper=!aws codecommit credential-helper $@' "
+                    "--config 'credential.UseHttpPath=true' "
+                    f"https://git-codecommit.{HOME_REGION}.amazonaws.com/v1/repos/{repository_name}"
+                )
+                os.system(command)
+
+                os.system(f"rm -rf {repository_name}/*")
+
+                os.system(f"cp -r {source_product_set}/{product.get('Name')}/{version.get('Name')}/* {repository_name}/")
+
+                if branch_name == "master":
+                    os.system(
+                        f"cd {repository_name} && git add . && git commit -am 'initial add' && git push"
+                    )
+                else:
+                    os.system(
+                        f"cd {repository_name} && git checkout -b {branch_name} && git add . && git commit -am 'initial add' && git push --set-upstream origin {branch_name}"
+                    )
+
+                os.system(f"rm -rf {repository_name}")
+
+    with open(target_portfolio_yaml.name, "w") as f:
+        f.write(yaml.safe_dump(source_portfolio))
+
 
 
 if __name__ == "__main__":
